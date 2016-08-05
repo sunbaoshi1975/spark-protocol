@@ -43,5 +43,10 @@ module.exports = {
      */
     message_token_max: 255,
 
+    // SBS added 2016-08-02
+    logApiMessages: true,
+    showVerboseCoreLogs: true,
+    keepaliveTimeout: 30,
+
     verboseProtocol: false
 };

@@ -15,7 +15,7 @@
 *   License along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
-
+var settings = require("../settings");
 var extend = require("xtend");
 var IHandshake = require("./IHandshake");
 var CryptoLib = require("./ICrypto");
@@ -522,7 +522,8 @@ Handshake.prototype = extend(IHandshake.prototype, {
             return;
         }
         this.client.recvCounter = msg.getId();
-        //logger.log("server: got a good hello! Counter was: " + msg.getId());
+        if (settings.showVerboseCoreLogs) {
+            logger.log("server: got a good hello! Counter was: " + msg.getId()); }
 
         try {
             if (msg.getPayload) {
@@ -531,7 +532,20 @@ Handshake.prototype = extend(IHandshake.prototype, {
                     var r = new buffers.BufferReader(payload);
                     this.client.spark_product_id = r.shiftUInt16();
                     this.client.product_firmware_version = r.shiftUInt16();
-                    //logger.log('version of core firmware is ', this.client.spark_product_id, this.client.product_firmware_version);
+                    this.client.platform_id = r.shiftUInt16();
+                    // SBS added 2016-08-03
+                    if (payload.length >=8 ) {
+                        this.client.cellular = (this.client.platform_id !== 0);
+                        this.client.platform_id = r.shiftUInt16(); }
+                    if (settings.showVerboseCoreLogs) {
+                        logger.log("server: got payload: ",
+                            {   length: payload.length,
+                                d1: this.client.spark_product_id,
+                                d2: this.client.product_firmware_version,
+                                d3: this.client.cellular,
+                                d4: this.client.platform_id
+                            });
+                    }
                 }
             }
             else {

@@ -87,6 +87,10 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
     apiSocket: null,
     eventsSocket: null,
 
+    // SBS added 2016-08-03
+    _connStartTime: null,
+    cellular: false,
+
     /**
      * Our state describing which functions take what arguments
      */
@@ -94,6 +98,7 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
 
     spark_product_id: null,
     product_firmware_version: null,
+    platform_id: null,
 
     /**
      * Used to track calls waiting on a description response
@@ -136,6 +141,7 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
             ip: this.getRemoteIPAddress(),
             product_id: this.spark_product_id,
             firmware_version: this.product_firmware_version,
+            platform_id: this.platform_id,
             cache_key: this._connection_key
         });
 
@@ -193,12 +199,16 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
                     if (settings.logApiMessages) {
                         logger.log('Describe - flashing', { coreID: that.coreID });
                     }
+                    // SBS updated 2016-08-03
                     that.sendApiResponse(sender, {
                         cmd: "DescribeReturn",
                         name: msg.name,
                         state: { f: [], v: [] },
                         product_id: that.spark_product_id,
-                        firmware_version: that.product_firmware_version
+                        online: true,
+                        lastPing: that._lastMessageTime,
+                        firmware_version: that.product_firmware_version,
+                        status: "busy"
                     });
                 }
                 else {
@@ -209,13 +219,19 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
                                 name: msg.name,
                                 state: that.coreFnState,
                                 product_id: that.spark_product_id,
-                                firmware_version: that.product_firmware_version
+                                online: that.isCoreOnline(),
+                                lastPing: that._lastMessageTime,
+                                firmware_version: that.product_firmware_version,
+                                status: "normal"
                             });
                         },
                         function (msg) {
                             that.sendApiResponse(sender, {
                                 cmd: "DescribeReturn",
                                 name: msg.name,
+                                online: false,
+                                lastPing: that._lastMessageTime,
+                                status: "normal",
                                 err: "Error, no device state"
                             });
                         }
@@ -326,7 +342,11 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
                     logger.log('Pinged, replying', { coreID: that.coreID });
                 }
 
-                this.sendApiResponse(sender, { cmd: "Pong", online: (this.socket != null), lastPing: this._lastCorePing });
+                // SBS replaced 2016-08-02
+                // this.sendApiResponse(sender, { cmd: "Pong", online: (this.socket != null), lastPing: this._lastCorePing });
+                /// With
+                this.sendApiResponse(sender, { cmd: "Pong", online: that.isCoreOnline(), lastPing: this._lastMessageTime, status: (isBusy ? "busy" : "normal") });
+                
                 break;
             default:
                 this.sendApiResponse(sender, {error: "unknown message" });
@@ -990,6 +1010,11 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
         this.onCoreSentEvent(msg, true);
     },
 
+    // SBS added 2016-08-03
+    set_cc3000_version: function(coreid, value) {
+        global.server.setCoreAttribute(coreid, "cc3000_patch_version", value);
+    },
+
     onCoreSentEvent: function(msg, isPublic) {
         if (!msg) {
             logger.error("CORE EVENT - msg obj was empty?!");
@@ -1033,7 +1058,7 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
             //TODO:
 //            //if the message is "cc3000-radio-version", save to the core_state collection for this core?
             if (lowername == "spark/cc3000-patch-version") {
-//                set_cc3000_version(this.coreID, obj.data);
+                set_cc3000_version(this.coreID, obj.data);
 //                eat_message = false;
             }
 
@@ -1052,10 +1077,13 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
 
             if (!global.publisher.publish(isPublic, obj.name, obj.userid, obj.data, obj.ttl, obj.published_at, this.getHexCoreID())) {
                 //this core is over its limit, and that message was not sent.
-                this.sendReply("EventSlowdown", msg.getId());
+                //this.sendReply("EventSlowdown", msg.getId());
             }
-            else {
-                this.sendReply("EventAck", msg.getId());
+            if(msg.isConfirmable()) {
+                console.log('Event confirmable');
+                this.sendReply( "EventAck", msg.getId() );
+            }else{
+                console.log('Event non confirmable');
             }
         }
         catch (ex) {
@@ -1108,6 +1136,7 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
 
         //modify our filter on the appropriate socket (create the socket if we haven't yet) to let messages through
         //this.eventsSocket.subscribe(isPublic, name, userid);
+        global.publisher.subscribe( name, userid,deviceID,this,this.onCoreEvent);
     },
 
     onCorePubHeard: function (name, data, ttl, published_at, coreid) {
@@ -1115,6 +1144,10 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
     },
     onCorePrivHeard: function (name, data, ttl, published_at, coreid) {
         this.sendCoreEvent(false, name, data, ttl, published_at, coreid);
+    },
+    // isPublic, name, userid, data, ttl, published_at, coreid);
+    onCoreEvent:function( isPublic, name, userid, data, ttl, published_at, coreid){
+        this.sendCoreEvent(isPublic, name, data, ttl, published_at, coreid);
     },
 
     /**
@@ -1223,7 +1256,8 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
 
         this.coreFnState = fnState;
 
-        //logger.log("got describe return ", this.coreFnState, { coreID: this.getHexCoreID() });
+        if (settings.logApiMessages) {
+            logger.log("got describe return ", this.coreFnState, { coreID: this.getHexCoreID() }); }
 
         //an example:
 //        this.coreFnState = {
@@ -1243,6 +1277,14 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
 
     getRemoteIPAddress: function () {
         return (this.socket && this.socket.remoteAddress) ? this.socket.remoteAddress.toString() : "unknown";
+    },
+
+    // SBS added 2016-08-03
+    isCoreOnline : function() {
+        var keepaliveTO = settings.keepaliveTimeout || 30;
+        var time_elapsed = (new Date() - this._lastMessageTime) / 1000;
+        var isOnline = ((this.socket != null) && (time_elapsed < keepaliveTO));
+        return isOnline;
     },
 
 //    _idleTimer: null,
@@ -1282,6 +1324,14 @@ SparkCore.prototype = extend(ISparkCore.prototype, EventEmitter.prototype, {
         }
 
         try {
+            // SBS added 2016-08-04, record last_heard
+            var lv_core = global.server.getCoreAttributes(this.coreID);
+            if (lv_core) {
+                if ( lv_core.last_heard < this._lastMessageTime ) {
+                    global.server.setCoreAttribute(this.coreID, "last_heard", this._lastMessageTime);
+                }
+            }
+
             var logInfo = { coreID: this.getHexCoreID(), cache_key: this._connection_key };
             if (this._connStartTime) {
                 var delta = ((new Date()) - this._connStartTime) / 1000.0;

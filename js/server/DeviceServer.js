@@ -27,6 +27,7 @@ var when = require('when');
 var path = require('path');
 var net = require('net');
 var fs = require('fs');
+var moment = require('moment');
 
 
 var DeviceServer = function (options) {
@@ -210,14 +211,24 @@ DeviceServer.prototype = {
                             var coreid = this.getHexCoreID();
                             that._allCoresByID[coreid] = core;
                             that._attribsByID[coreid] = that._attribsByID[coreid] || {
-                                coreID: coreid,
-                                name: null,
-                                ip: this.getRemoteIPAddress(),
-                                product_id: this.spark_product_id,
-                                firmware_version: this.product_firmware_version
+                                coreID: coreid
                             };
+
+                            // SBS added 2016-08-03, set attributes and save file
+                            that.setCoreAttribute(coreid, "ip", this.getRemoteIPAddress());
+                            that.setCoreAttribute(coreid, "last_heard", this._connStartTime);
+                            that.setCoreAttribute(coreid, "product_id", this.spark_product_id);
+                            that.setCoreAttribute(coreid, "platform_id", this.platform_id);
+                            that.setCoreAttribute(coreid, "cellular", this.cellular);
+                            that.setCoreAttribute(coreid, "firmware_version", this.product_firmware_version);
+                            if (settings.showVerboseCoreLogs) {
+                                logger.log("Attributes: " + JSON.stringify(that._attribsByID[coreid]));
+                            }
+
+                            global.publisher.publish(false,'spark/status','online',null,60,moment(new Date()).toISOString(),coreid);
                         });
                         core.on('disconnect', function (msg) {
+                            global.publisher.publish(false,'spark/status','offline',null,60,moment(new Date()).toISOString(),core.coreID);
                             logger.log("Session ended for " + core._connection_key);
                             delete _cores[key];
                         });
